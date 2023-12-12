@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    {% load static %}
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Scroll Example</title>
+    <script src="{% static 'pdf.js/build/pdf.js' %}"></script>
+    <script src="{% static 'pdf.js/web/viewer.js' %}"></script>
+    <link rel="stylesheet" href="{% static 'pdf.js/web/viewer.css' %}">
+    <style>
+        #pdf-container {
+            overflow-y: auto;
+            border: 1px solid #ccc;
+        }
+
+        .container {
+            height: 100px;
+            width: auto;
+            overflow-y: auto;
+        }
+
+        ::selection {
+            background: #a0d8ff;
+        }
+
+        #text_layer {
+            position: absolute;
+            left: 0;
+            top: 20px;
+            right: 0;
+            bottom: 0;
+            overflow: hidden;
+            opacity: 0.1;
+            line-height: 1.0;
+            word-spacing: normal;
+        }
+
+        #text_layer > div {
+            color: transparent;
+            position: absolute;
+            white-space: pre;
+            cursor: text;
+            transform-origin: 0 0;
+        }
+    </style>
+</head>
+
+<body>
+<div id="navigation_controls">
+    <button id="go_previous">Previous</button>
+    <button id="go_next">Next</button>
+</div>
+<canvas id="pdf_renderer"></canvas>
+<div id="text_layer"></div>
+<script>
+    const PDF_PATH = "{% static 'pdf sample_new.pdf' %}";
+    var PAGE_NUMBER = 1;
+    var PAGE_SCALE = 2.0;
+
+    // Требуемое пространство имен для элементов SVG.
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const options = {
+        pdf: null,
+        currentPage: PAGE_NUMBER,
+        zoom: PAGE_SCALE
+    };
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '{% static "pdf.js/build/pdf.worker.js" %}';
+
+    pdfjsLib.getDocument(PDF_PATH).promise.then((pdf) => {
+        options.pdf = pdf;
+        render();
+    });
+
+    const previousButton = document.getElementById("go_previous");
+    const nextButton = document.getElementById("go_next");
+
+    // Получение размера экрана.
+    const outputScale = window.devicePixelRatio || 1;
+    const transform = outputScale !== 1
+        ? [outputScale, 0, 0, outputScale, 0, 0]
+        : null;
+
+    previousButton.addEventListener("click", function () {
+        if (options.currentPage > 1) {
+            options.currentPage--;
+            deleteItems()
+            PAGE_NUMBER--;
+            pageLoaded()
+            render();
+        }
+    });
+
+    nextButton.addEventListener("click", function () {
+        if (options.currentPage < options.pdf.numPages) {
+            options.currentPage++;
+            deleteItems()
+            PAGE_NUMBER++;
+            pageLoaded()
+            render();
+        }
+    });
+
+    function render() {
+        options.pdf.getPage(options.currentPage).then((page) => {
+            const canvas = document.getElementById("pdf_renderer");
+            const ctx = canvas.getContext('2d');
+            const viewport = page.getViewport({scale: options.zoom});
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            page.render({
+                canvasContext: ctx,
+                transform: transform,
+                viewport: viewport
+            });
+        });
+    }
+
+    // Формирование svg-изображений с текстом.
+    function buildSVG(viewport, textContent) {
+        // Начало строительства svg.
+        const svg = document.createElementNS(SVG_NS, "svg:svg");
+        svg.setAttribute("width", viewport.width + "px");
+        svg.setAttribute("height", viewport.height + "px");
+        // Трансформация размера. 1px для текста.
+        svg.setAttribute("font-size", 1);
+        // Временные переменные для сбора и форматирование строк svg.
+        var matrix = "";
+        var text_temp = "";
+        var counter = 0;
+        textContent.items.forEach(function (textItem) {
+            // Изменение положение текста, если это необходимо.
+            const tx = pdfjsLib.Util.transform(
+                pdfjsLib.Util.transform(viewport.transform, textItem.transform),
+                [1, 0, 0, -1, 0, 0]
+            );
+            counter += 1;
+            console.log(textContent)
+            const style = textContent.styles[textItem.fontName];
+            // Добавление текста в элемент
+            const text = document.createElementNS(SVG_NS, "svg:text");
+            text.setAttribute("transform", "matrix(" + tx.join(" ") + ")");
+            text.setAttribute("font-family", style.fontFamily);
+            if (text_temp.length === 0) {
+                matrix = "matrix(" + tx.join(" ") + ")";
+            }
+            if (textItem.str.length !== 0) {
+                text_temp += textItem.str;
+            } else if (textItem.str.length === 0) {
+                text.textContent = text_temp;
+                text.setAttribute("transform", matrix)
+                svg.append(text)
+                text_temp = "";
+            }
+            if (textContent.items.length === counter) {
+                text.textContent = text_temp;
+                text.setAttribute("transform", matrix)
+                text_temp = "";
+                svg.append(text);
+            }
+        });
+        return svg;
+    }
+
+    // Отображение текста на странице.
+    async function pageLoaded() {
+        // Загрузка документа и страницы с текстом.
+        const loadingTask = pdfjsLib.getDocument({url: PDF_PATH});
+        const pdfDocument = await loadingTask.promise;
+        const page = await pdfDocument.getPage(PAGE_NUMBER);
+        const viewport = page.getViewport({scale: PAGE_SCALE});
+        const textContent = await page.getTextContent();
+        // Создание SVG изображений.
+        const svg = buildSVG(viewport, textContent);
+        document.getElementById("text_layer").append(svg);
+        // Отображение SVG на странице.
+        page.cleanup();
+    }
+
+    document.addEventListener("DOMContentLoaded", function () {
+        if (typeof pdfjsLib === "undefined") {
+            alert("Please build the pdfjs-dist library using\n  `gulp dist-install`");
+            return;
+        }
+        pageLoaded();
+    });
+
+    // Удаление объектов внутри блока.
+    function deleteItems() {
+
+        const deleteElement = document.getElementById("text_layer");
+        deleteElement.innerHTML = '';
+
+    }
+</script>
+</body>
+</html>
